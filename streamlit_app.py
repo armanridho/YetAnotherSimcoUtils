@@ -1,151 +1,179 @@
 import streamlit as st
 import pandas as pd
-import math
-from pathlib import Path
+import plotly.express as px
+from datetime import datetime, timedelta
+from openai import OpenAI
+from ollamafreeapi import OllamaFreeAPI
+from concurrent.futures import ThreadPoolExecutor
+import io
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+st.set_page_config(page_title="Buyer Intelligence • Red Forrest Inc.", layout="wide", page_icon="🔥")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.title("🔥 Buyer Intelligence • Red Forrest Inc. v3.1")
+st.markdown("**AI-Powered • Smart Analytics • Multi AI Backup**")
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+@st.cache_resource
+def get_ai_clients():
+    return {
+        "primary": OpenAI(base_url="https://qwen.ai.unturf.com/v1", api_key="choose-any-value"),
+        "backup": OllamaFreeAPI()
+    }
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+def call_with_timeout(func, timeout_sec=6):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(func)
+        try:
+            return future.result(timeout=timeout_sec)
+        except:
+            return None
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+def ask_ai_analyst(question, context_data=""):
+    clients = get_ai_clients()
+    prompt = f"""Kamu adalah Senior Buyer Intelligence Analyst di Red Forrest Inc.
+Analisis data buyer, contract sell, profitability, risiko, dan berikan rekomendasi actionable.
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+Data yang tersedia:
+{context_data[:12000]}
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+Pertanyaan: {question}
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+Jawab secara profesional, tajam, dan langsung ke poin."""
 
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+    def primary_call():
+        response = clients["primary"].chat.completions.create(
+            model="hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.65,
+            max_tokens=1500
         )
+        return response.choices[0].message.content
+
+    result = call_with_timeout(primary_call, 6)
+    if result:
+        return result
+
+    def backup_call():
+        response = clients["backup"].chat(
+            model="deepseek-r1:latest",
+            prompt=prompt,
+            temperature=0.7
+        )
+        return response
+
+    result = call_with_timeout(backup_call, 12)
+    if result:
+        return result
+
+    return "❌ Kedua AI sedang mengalami kendala. Coba lagi dalam 10-20 detik."
+
+uploaded_files = st.file_uploader(
+    "Upload semua CSV sekaligus (sand, transport, power, account, warehouse)",
+    type="csv", accept_multiple_files=True
+)
+
+if uploaded_files:
+    dfs = {}
+    for file in uploaded_files:
+        df = pd.read_csv(file)
+        fn = file.name.lower()
+        if "sand" in fn: dfs["sand"] = df
+        elif "transport" in fn: dfs["transport"] = df
+        elif "power" in fn: dfs["power"] = df
+        elif "account" in fn or "history" in fn: dfs["account"] = df
+        elif "warehouse" in fn: dfs["warehouse"] = df
+
+    st.success(f"✅ {len(uploaded_files)} file berhasil di-load!")
+
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📊 Buyer Intelligence", "⚡ Quick Contract", "🏆 Profitability", 
+        "📈 Daily Operation", "⚡ Power Intelligence", "📦 Warehouse", "🤖 AI Analyst"
+    ])
+
+    sell_df = pd.DataFrame()
+    if "sand" in dfs:
+        sand_df = dfs["sand"].copy()
+        sand_df["Timestamp"] = pd.to_datetime(sand_df["Timestamp"], utc=True, errors='coerce')
+        sell_df = sand_df[(sand_df["Category"] == "Contract sell") & (sand_df["Resource"] == "Sand")].copy()
+        sell_df["Amount"] = sell_df["Amount"].abs()
+
+    with tab1:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📋 Last 48 Hours Contracts")
+            if not sell_df.empty:
+                recent = sell_df[sell_df["Timestamp"] >= (pd.Timestamp.now(tz='UTC') - timedelta(hours=48))]
+                st.dataframe(recent[["Timestamp", "Other Party", "Amount", "Quality"]], use_container_width=True)
+        with col2:
+            st.subheader("🚨 Smart Alerts")
+            if not sell_df.empty:
+                buyer_last = sell_df.groupby("Other Party").agg(
+                    Last_Contract=("Timestamp", "max"),
+                    Last_Qty=("Amount", "last"),
+                    Last_Quality=("Quality", "last")
+                ).reset_index()
+                buyer_last["Hours_Ago"] = (pd.Timestamp.now(tz='UTC') - buyer_last["Last_Contract"]).dt.total_seconds() / 3600
+                for _, row in buyer_last[buyer_last["Hours_Ago"] > 24].iterrows():
+                    st.error(f"🚨 **{row['Other Party']}** — sudah {int(row['Hours_Ago'])} jam tidak beli!")
+
+    with tab2:
+        st.subheader("⚡ Quick Contract Generator")
+        if not sell_df.empty:
+            buyers = sorted(sell_df["Other Party"].unique())
+            selected = st.selectbox("Pilih Buyer", buyers)
+            buyer_data = sell_df[sell_df["Other Party"] == selected]
+            if not buyer_data.empty:
+                top = buyer_data.groupby(["Amount", "Quality"]).size().idxmax()
+                qty, quality = top
+                contract_text = f"Contract sell Sand {int(qty)} Q{int(quality)} ke {selected}"
+                st.code(contract_text, language=None)
+                if st.button("Copy Contract"):
+                    st.success("✅ Contract copied!")
+
+    with tab3:
+        st.subheader("🏆 Buyer Profitability Ranking")
+        if not sell_df.empty:
+            sell_df["Est_Profit"] = sell_df["Amount"] * 0.42
+            ranking = sell_df.groupby("Other Party").agg(
+                Total_Sand=("Amount", "sum"),
+                Est_Profit=("Est_Profit", "sum")
+            ).sort_values("Est_Profit", ascending=False).reset_index()
+            ranking["Est_Profit"] = ranking["Est_Profit"].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(ranking, use_container_width=True)
+
+    with tab4:
+        st.subheader("📈 Daily Operation")
+        if "sand" in dfs:
+            today = pd.Timestamp.now(tz='UTC').floor('D')
+            prod_today = sand_df[(sand_df["Category"] == "Production") & 
+                               (sand_df["Timestamp"].dt.date == today.date())]["Amount"].sum()
+            st.metric("Sand Produksi Hari Ini", f"{prod_today:,.0f} unit")
+
+    with tab5:
+        st.subheader("⚡ Power Intelligence")
+        if "power" in dfs:
+            power_df = dfs["power"].copy()
+            power_df["Timestamp"] = pd.to_datetime(power_df["Timestamp"], utc=True, errors='coerce')
+            st.plotly_chart(px.line(power_df, x="Timestamp", y="Amount", color="Category", title="Power Movement"), use_container_width=True)
+
+    with tab6:
+        st.subheader("📦 Warehouse & Reports")
+        if "warehouse" in dfs:
+            st.dataframe(dfs["warehouse"], use_container_width=True)
+
+    with tab7:
+        st.subheader("🤖 AI Analyst — Qwen + OllamaFreeAPI Backup")
+        question = st.text_area("Tanya AI Analyst:", 
+            "Analisis buyer mana yang paling menguntungkan dan rekomendasi kontrak untuk 7 hari ke depan?")
+        
+        if st.button("🔍 Ask AI Analyst"):
+            if not sell_df.empty:
+                context = sell_df.to_string()
+                with st.spinner("AI sedang menganalisis data..."):
+                    answer = ask_ai_analyst(question, context)
+                    st.markdown(answer)
+            else:
+                st.warning("Upload data sand.csv terlebih dahulu")
+
+    st.caption("v3.1 BEAST MODE • AI Backup System • Red Forrest Inc.")
+else:
+    st.info("👆 Upload semua file CSV untuk memulai analisis")
